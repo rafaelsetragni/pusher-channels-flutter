@@ -3,6 +3,14 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+enum PusherConnectionState {
+  connecting,
+  connected,
+  disconnected,
+  reconnecting,
+  unknown,
+}
+
 class PusherEvent {
   String channelName;
   String eventName;
@@ -69,7 +77,7 @@ class PusherChannelsFlutter {
 
   MethodChannel methodChannel = const MethodChannel('pusher_channels_flutter');
   Map<String, PusherChannel> channels = {};
-  String connectionState = 'DISCONNECTED';
+  PusherConnectionState connectionState = PusherConnectionState.disconnected;
   Function(String currentState, String previousState)? onConnectionStateChange;
   Function(String channelName, dynamic data)? onSubscriptionSucceeded;
   Function(String message, dynamic error)? onSubscriptionError;
@@ -88,12 +96,15 @@ class PusherChannelsFlutter {
 
   Future<void> init({
     required String apiKey,
-    required String cluster,
+    String? cluster,
+    String? host,
+    int? port,
     bool? useTLS,
     int? activityTimeout,
     int? pongTimeout,
     int? maxReconnectionAttempts,
     int? maxReconnectGapInSeconds,
+    bool? allowSelfSigned,
     String? proxy, // pusher-websocket-java only
     bool? enableStats, // pusher-js only
     List<String>? disabledTransports, // pusher-js only
@@ -116,6 +127,8 @@ class PusherChannelsFlutter {
         onAuthorizer,
     Function(String channelName, int subscriptionCount)? onSubscriptionCount,
   }) async {
+    assert(cluster != null || host != null,
+        'Either cluster or host must be provided');
     methodChannel.setMethodCallHandler(_platformCallHandler);
     this.onConnectionStateChange = onConnectionStateChange;
     this.onError = onError;
@@ -130,6 +143,10 @@ class PusherChannelsFlutter {
     await methodChannel.invokeMethod('init', {
       "apiKey": apiKey,
       "cluster": cluster,
+      "host": host,
+      "wsPort": port,
+      "wssPort": port,
+      "allowSelfSigned": allowSelfSigned,
       "useTLS": useTLS,
       "activityTimeout": activityTimeout,
       "pongTimeout": pongTimeout,
@@ -156,10 +173,17 @@ class PusherChannelsFlutter {
     final String? userId = call.arguments["userId"];
     switch (call.method) {
       case 'onConnectionStateChange':
-        connectionState = call.arguments['currentState'].toUpperCase();
+        final currentStateString =
+            call.arguments['currentState'].toString().toUpperCase();
+        final previousStateString =
+            call.arguments['previousState'].toString().toUpperCase();
+
+        connectionState = _mapConnectionState(currentStateString);
+
         onConnectionStateChange?.call(
-            call.arguments['currentState'].toUpperCase(),
-            call.arguments['previousState'].toUpperCase());
+          currentStateString,
+          previousStateString,
+        );
         return Future.value(null);
       case 'onError':
         onError?.call(call.arguments['message'], call.arguments['code'],
@@ -224,6 +248,21 @@ class PusherChannelsFlutter {
             call.arguments['socketId'], call.arguments['options']);
       default:
         throw MissingPluginException('Unknown method ${call.method}');
+    }
+  }
+
+  PusherConnectionState _mapConnectionState(String state) {
+    switch (state) {
+      case 'CONNECTED':
+        return PusherConnectionState.connected;
+      case 'CONNECTING':
+        return PusherConnectionState.connecting;
+      case 'DISCONNECTED':
+        return PusherConnectionState.disconnected;
+      case 'RECONNECTING':
+        return PusherConnectionState.reconnecting;
+      default:
+        return PusherConnectionState.unknown;
     }
   }
 
